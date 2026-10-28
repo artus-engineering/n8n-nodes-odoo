@@ -1,0 +1,21 @@
+{
+    "node": "@artus-engineering/n8n-nodes-odoo.odooJson2",
+    "nodeVersion": "1.0",
+    "codexVersion": "1.0",
+    "categories": ["Development", "Data & Storage"],
+    "resources": {
+        "credentialDocumentation": [
+            {
+                "url": "https://github.com/artus-engineering/n8n-nodes-odoo?tab=readme-ov-file#credentials"
+            }
+        ],
+        "primaryDocumentation": [
+            {
+                "url": "https://github.com/artus-engineering/n8n-nodes-odoo?tab=readme-ov-file"
+            },
+            {
+                "url": "https://www.odoo.com/documentation/19.0/developer/reference/external_api.html"
+            }
+        ]
+    }
+}
