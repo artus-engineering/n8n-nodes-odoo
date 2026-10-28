@@ -1,0 +1,24 @@
+{
+    "editor.defaultFormatter": "biomejs.biome",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.biome": "explicit",
+        "source.organizeImports.biome": "explicit"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[typescript]": {
+        "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[json]": {
+        "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[jsonc]": {
+        "editor.defaultFormatter": "biomejs.biome"
+    },
+    "sonarlint.connectedMode.project": {
+        "connectionId": "https-sonar-artus-engineering-de",
+        "projectKey": "artus-engineering_n8n-nodes-odoo_a0891ee7-354c-4ff3-97f2-e52cc08b6c53"
+    }
+}

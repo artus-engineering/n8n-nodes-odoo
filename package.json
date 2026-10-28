@@ -1,0 +1,51 @@
+{
+    "name": "@artus-engineering/n8n-nodes-odoo",
+    "version": "0.1.0",
+    "packageManager": "pnpm@12.14.0",
+    "description": "n8n community node for the Odoo JSON-2 API that waits out Odoo outages and logs them to Grafana Loki.",
+    "license": "MIT",
+    "homepage": "https://artus-engineering.de",
+    "keywords": ["n8n-community-node-package", "n8n", "odoo", "json-2", "retry", "loki"],
+    "author": {
+        "name": "Artus Engineering",
+        "email": "hi@artus-engineering.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/artus-engineering/n8n-nodes-odoo.git"
+    },
+    "bugs": {
+        "url": "https://github.com/artus-engineering/n8n-nodes-odoo/issues"
+    },
+    "files": ["dist"],
+    "n8n": {
+        "n8nNodesApiVersion": 1,
+        "strict": true,
+        "credentials": ["dist/credentials/OdooJson2Api.credentials.js", "dist/credentials/OdooLokiApi.credentials.js"],
+        "nodes": ["dist/nodes/OdooJson2/OdooJson2.node.js"]
+    },
+    "scripts": {
+        "build": "n8n-node build && node scripts/clean-dist.mjs",
+        "dev": "n8n-node dev",
+        "format": "biome format --write .",
+        "lint": "biome check .",
+        "lint:fix": "biome check --write .",
+        "lint:n8n": "n8n-node lint",
+        "typecheck": "tsc -p tsconfig.test.json --noEmit",
+        "test": "vitest run --coverage",
+        "test:watch": "vitest"
+    },
+    "peerDependencies": {
+        "n8n-workflow": "*"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "2.5.15",
+        "@n8n/node-cli": "0.53.2",
+        "@vitest/coverage-v8": "5.0.5",
+        "eslint": "9.39.5",
+        "lefthook": "2.2.2",
+        "n8n-workflow": "2.44.1",
+        "typescript": "6.0.3",
+        "vitest": "5.0.5"
+    }
+}

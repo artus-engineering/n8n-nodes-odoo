@@ -1,0 +1,15 @@
+packages:
+  - .
+allowBuilds:
+  lefthook: true
+  esbuild: false
+  cpu-features: false
+  eslint-plugin-n8n-nodes-base: true
+  isolated-vm: false
+  ssh2: false
+  unrs-resolver: false
+overrides:
+  handlebars@>=3.0.0 <=4.7.9: ^4.7.10
+  qs@>=2.2.5 <6.16.0: ^6.16.0
+  stream-json@<3.6.0: ^3.6.0
+  uuid@<11.1.1: ^11.1.1
