@@ -1,4 +1,5 @@
 import {
+    type ICredentialDataDecryptedObject,
     type IDataObject,
     type IExecuteFunctions,
     type IHttpRequestOptions,
@@ -26,6 +27,7 @@ import {
     sendWithWaiting,
     toRecords,
     validateTarget,
+    type WaitDependencies,
     type WaitSettings
 } from './GenericFunctions'
 import { odooJson2Properties } from './OdooJson2Description'
@@ -91,6 +93,140 @@ function toErrorItem(outcome: Extract<RequestOutcome, { ok: false }>, model: str
     }
 }
 
+interface ItemRequest {
+    model: string
+    method: string
+    odooUrl: string
+    database: string
+    body: IDataObject
+    retryMode: RetryMode
+    output: string
+    settings: WaitSettings & { timeoutMs: number }
+}
+
+function readItemRequest(
+    this: IExecuteFunctions,
+    itemIndex: number,
+    credentials: ICredentialDataDecryptedObject,
+    model: string,
+    method: string
+): ItemRequest {
+    const node = this.getNode()
+    validateTarget(model, method, node, itemIndex)
+    const odooUrl = normalizeOdooUrl(
+        String(this.getNodeParameter('odooUrl', itemIndex, '') || credentials.url || ''),
+        node,
+        itemIndex
+    )
+    const database = String(this.getNodeParameter('database', itemIndex, '') || credentials.database || '').trim()
+    if (!database) {
+        throw new NodeOperationError(node, 'Database is empty in the node and in the credential', { itemIndex })
+    }
+    return {
+        model,
+        method,
+        odooUrl,
+        database,
+        body: parseBody(this.getNodeParameter('body', itemIndex, {}), node, itemIndex),
+        retryMode: this.getNodeParameter('retryMode', itemIndex, 'automatic') as RetryMode,
+        output: this.getNodeParameter('output', itemIndex, 'records') as string,
+        settings: readSettings.call(this, itemIndex)
+    }
+}
+
+function createDependencies(this: IExecuteFunctions, request: ItemRequest, lokiPushUrl?: string): WaitDependencies {
+    const node = this.getNode()
+    const workflow = this.getWorkflow()
+    const httpRequest: IHttpRequestOptions = {
+        method: 'POST',
+        url: `${request.odooUrl}/json/2/${request.model}/${request.method}`,
+        headers: { 'X-Odoo-Database': request.database },
+        body: request.body,
+        json: true,
+        timeout: request.settings.timeoutMs,
+        returnFullResponse: true,
+        ignoreHttpStatusErrors: true
+    }
+    const lokiContext = {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        executionId: this.getExecutionId(),
+        nodeName: node.name,
+        model: request.model,
+        method: request.method,
+        odooUrl: request.odooUrl
+    }
+    return {
+        send: async (): Promise<SendResult> => {
+            try {
+                const response = (await this.helpers.httpRequestWithAuthentication.call(
+                    this,
+                    'odooJson2Api',
+                    httpRequest
+                )) as OdooResponse
+                return { response }
+            } catch (error) {
+                return { error }
+            }
+        },
+        isHealthy: () => isHealthy.call(this, request.odooUrl),
+        sleep: ms => sleep(ms),
+        now: () => Date.now(),
+        isCancelled: () => this.getExecutionCancelSignal?.()?.aborted === true,
+        log: async (event: LogEvent) => {
+            this.logger.warn(`Odoo JSON-2 ${node.name}: ${event.event}: ${event.message}`)
+            if (lokiPushUrl) {
+                await pushToLoki.call(this, lokiPushUrl, buildLokiPayload(event, lokiContext, Date.now()))
+            }
+        }
+    }
+}
+
+function toOutputItems(response: OdooResponse, output: string, itemIndex: number): INodeExecutionData[] {
+    if (output === 'fullResponse') {
+        return [
+            {
+                json: {
+                    statusCode: response.statusCode ?? null,
+                    headers: response.headers ?? {},
+                    body: (response.body ?? null) as IDataObject
+                },
+                pairedItem: { item: itemIndex }
+            }
+        ]
+    }
+    return toRecords(response.body).map(record => ({ json: record, pairedItem: { item: itemIndex } }))
+}
+
+async function processItem(
+    this: IExecuteFunctions,
+    itemIndex: number,
+    credentials: ICredentialDataDecryptedObject,
+    model: string,
+    method: string,
+    lokiPushUrl?: string
+): Promise<INodeExecutionData[]> {
+    const request = readItemRequest.call(this, itemIndex, credentials, model, method)
+    const outcome = await sendWithWaiting(
+        createDependencies.call(this, request, lokiPushUrl),
+        { odooUrl: request.odooUrl, model, method, retryable: isRetryable(method, request.retryMode) },
+        request.settings,
+        outages
+    )
+    if (outcome.ok) {
+        return toOutputItems(outcome.response, request.output, itemIndex)
+    }
+    const error = toErrorItem(outcome, model, method)
+    if (this.continueOnFail()) {
+        return [{ json: { error }, pairedItem: { item: itemIndex } }]
+    }
+    throw new NodeApiError(this.getNode(), error as JsonObject, {
+        message: outcome.message,
+        httpCode: (error.httpCode as string | null) ?? undefined,
+        itemIndex
+    })
+}
+
 export class OdooJson2 implements INodeType {
     description: INodeTypeDescription = {
         displayName: 'Odoo JSON-2',
@@ -121,7 +257,6 @@ export class OdooJson2 implements INodeType {
         const returnData: INodeExecutionData[] = []
         const credentials = await this.getCredentials('odooJson2Api')
         const node = this.getNode()
-        const workflow = this.getWorkflow()
 
         let lokiPushUrl: string | undefined
         if (this.getNodeParameter('lokiLogging', 0, false) === true) {
@@ -133,107 +268,7 @@ export class OdooJson2 implements INodeType {
             const model = String(this.getNodeParameter('model', itemIndex, '')).trim()
             const method = String(this.getNodeParameter('method', itemIndex, '')).trim()
             try {
-                validateTarget(model, method, node, itemIndex)
-                const odooUrl = normalizeOdooUrl(
-                    String(this.getNodeParameter('odooUrl', itemIndex, '') || credentials.url || ''),
-                    node,
-                    itemIndex
-                )
-                const database = String(this.getNodeParameter('database', itemIndex, '') || credentials.database || '')
-                if (!database.trim()) {
-                    throw new NodeOperationError(node, 'Database is empty in the node and in the credential', {
-                        itemIndex
-                    })
-                }
-                const body = parseBody(this.getNodeParameter('body', itemIndex, {}), node, itemIndex)
-                const retryMode = this.getNodeParameter('retryMode', itemIndex, 'automatic') as RetryMode
-                const output = this.getNodeParameter('output', itemIndex, 'records') as string
-                const settings = readSettings.call(this, itemIndex)
-
-                const request: IHttpRequestOptions = {
-                    method: 'POST',
-                    url: `${odooUrl}/json/2/${model}/${method}`,
-                    headers: { 'X-Odoo-Database': database.trim() },
-                    body,
-                    json: true,
-                    timeout: settings.timeoutMs,
-                    returnFullResponse: true,
-                    ignoreHttpStatusErrors: true
-                }
-
-                const outcome = await sendWithWaiting(
-                    {
-                        send: async (): Promise<SendResult> => {
-                            try {
-                                const response = (await this.helpers.httpRequestWithAuthentication.call(
-                                    this,
-                                    'odooJson2Api',
-                                    request
-                                )) as OdooResponse
-                                return { response }
-                            } catch (error) {
-                                return { error }
-                            }
-                        },
-                        isHealthy: () => isHealthy.call(this, odooUrl),
-                        sleep: ms => sleep(ms),
-                        now: () => Date.now(),
-                        isCancelled: () => this.getExecutionCancelSignal?.()?.aborted === true,
-                        log: async (event: LogEvent) => {
-                            this.logger.warn(`Odoo JSON-2 ${node.name}: ${event.event}: ${event.message}`)
-                            if (lokiPushUrl) {
-                                await pushToLoki.call(
-                                    this,
-                                    lokiPushUrl,
-                                    buildLokiPayload(
-                                        event,
-                                        {
-                                            workflowId: workflow.id,
-                                            workflowName: workflow.name,
-                                            executionId: this.getExecutionId(),
-                                            nodeName: node.name,
-                                            model,
-                                            method,
-                                            odooUrl
-                                        },
-                                        Date.now()
-                                    )
-                                )
-                            }
-                        }
-                    },
-                    { odooUrl, model, method, retryable: isRetryable(method, retryMode) },
-                    settings,
-                    outages
-                )
-
-                if (!outcome.ok) {
-                    const error = toErrorItem(outcome, model, method)
-                    if (this.continueOnFail()) {
-                        returnData.push({ json: { error }, pairedItem: { item: itemIndex } })
-                        continue
-                    }
-                    throw new NodeApiError(node, error as JsonObject, {
-                        message: outcome.message,
-                        httpCode: (error.httpCode as string | null) ?? undefined,
-                        itemIndex
-                    })
-                }
-
-                if (output === 'fullResponse') {
-                    returnData.push({
-                        json: {
-                            statusCode: outcome.response.statusCode ?? null,
-                            headers: outcome.response.headers ?? {},
-                            body: (outcome.response.body ?? null) as IDataObject
-                        },
-                        pairedItem: { item: itemIndex }
-                    })
-                    continue
-                }
-                for (const record of toRecords(outcome.response.body)) {
-                    returnData.push({ json: record, pairedItem: { item: itemIndex } })
-                }
+                returnData.push(...(await processItem.call(this, itemIndex, credentials, model, method, lokiPushUrl)))
             } catch (error) {
                 if (this.continueOnFail() && !(error instanceof NodeApiError)) {
                     returnData.push({

@@ -106,7 +106,8 @@ export function isRetryable(method: string, mode: RetryMode): boolean {
 function errorCode(error: unknown): string {
     if (!error || typeof error !== 'object') return ''
     const record = error as { code?: unknown; cause?: { code?: unknown } }
-    return String(record.code ?? record.cause?.code ?? '')
+    const code = record.code ?? record.cause?.code
+    return typeof code === 'string' ? code : ''
 }
 
 function errorMessage(error: unknown): string {
@@ -128,7 +129,8 @@ function odooErrorMessage(response: OdooResponse): { message: string; name?: str
     if (typeof body === 'string' && body.trim()) {
         return { message: body.trim().slice(0, 300) }
     }
-    return { message: `HTTP ${response.statusCode}${response.statusMessage ? ` ${response.statusMessage}` : ''}` }
+    const suffix = response.statusMessage ? ' ' + response.statusMessage : ''
+    return { message: `HTTP ${response.statusCode}${suffix}` }
 }
 
 export function classify(result: SendResult): Classification {
@@ -158,6 +160,115 @@ function statusOf(result: SendResult): number | undefined {
     return Number.isFinite(status) && status > 0 ? status : undefined
 }
 
+/** Fails at once while an outage this process already gave up on is still going on. */
+async function checkRememberedOutage(
+    deps: WaitDependencies,
+    target: RequestTarget,
+    settings: WaitSettings,
+    outages: OutageRegistry,
+    label: string
+): Promise<RequestOutcome | undefined> {
+    const gaveUpAt = outages.get(target.odooUrl)
+    if (gaveUpAt === undefined) return undefined
+    if (!(await deps.isHealthy()) && deps.now() - gaveUpAt < settings.maxWaitMs) {
+        const minutes = minutesBetween(gaveUpAt, deps.now())
+        return {
+            ok: false,
+            odooUnavailable: true,
+            message: `Odoo weiterhin nicht erreichbar (aufgegeben vor ${minutes} min), ${label} nicht ausgefuehrt`
+        }
+    }
+    outages.delete(target.odooUrl)
+    return undefined
+}
+
+function giveUpReason(
+    classification: Extract<Classification, { kind: 'unavailable' }>,
+    target: RequestTarget,
+    attempt: number,
+    settings: WaitSettings,
+    label: string
+): { event: OdooEvent; message: string } | undefined {
+    const reason = classification.reason
+    if (!classification.notDelivered && !target.retryable) {
+        return {
+            event: 'odoo_nicht_wiederholt',
+            message: `Odoo nicht erreichbar (${reason}) bei ${label}. Nicht wiederholt, weil die Anfrage schon ausgefuehrt sein kann: in Odoo pruefen`
+        }
+    }
+    if (attempt >= settings.maxAttempts) {
+        return {
+            event: 'odoo_aufgegeben',
+            message: `Odoo nicht erreichbar (${reason}) bei ${label}, nach ${attempt} Versuchen aufgegeben`
+        }
+    }
+    return undefined
+}
+
+interface WaitContext {
+    label: string
+    reason: string
+    attempt: number
+    httpStatus?: number
+}
+
+/** Polls /web/health until it passes. Returns undefined once Odoo is back, otherwise the failed outcome. */
+async function waitForRecovery(
+    deps: WaitDependencies,
+    target: RequestTarget,
+    settings: WaitSettings,
+    outages: OutageRegistry,
+    context: WaitContext
+): Promise<RequestOutcome | undefined> {
+    const { label, attempt, httpStatus } = context
+    const waitingSince = deps.now()
+    const base = { attempt, httpStatus, waitingSince: new Date(waitingSince).toISOString() }
+    await deps.log({
+        ...base,
+        level: 'warn',
+        event: 'odoo_nicht_erreichbar',
+        message: `Odoo nicht erreichbar (${context.reason}) bei ${label}, Versuch ${attempt}, warte auf /web/health`
+    })
+
+    let lastLog = waitingSince
+    for (;;) {
+        if (deps.isCancelled()) {
+            return {
+                ok: false,
+                odooUnavailable: true,
+                message: `Lauf abgebrochen, waehrend ${label} auf Odoo wartete`,
+                httpStatus
+            }
+        }
+        await deps.sleep(settings.checkIntervalMs)
+        const minutes = minutesBetween(waitingSince, deps.now())
+        if (await deps.isHealthy()) {
+            await deps.log({
+                ...base,
+                level: 'info',
+                event: 'odoo_wieder_erreichbar',
+                message: `Odoo wieder erreichbar nach ${minutes} min, ${label} wird erneut geschickt`
+            })
+            return undefined
+        }
+        if (deps.now() - waitingSince >= settings.maxWaitMs) {
+            outages.set(target.odooUrl, deps.now())
+            const message = `Odoo seit ${minutes} min nicht erreichbar (/web/health meldet kein pass), ${label} nicht ausgefuehrt`
+            await deps.log({ ...base, level: 'error', event: 'odoo_wartezeit_ueberschritten', message })
+            return { ok: false, odooUnavailable: true, message, httpStatus }
+        }
+        if (deps.now() - lastLog >= settings.waitingLogIntervalMs) {
+            lastLog = deps.now()
+            await deps.log({
+                ...base,
+                level: 'warn',
+                event: 'odoo_wartet',
+                message: `Odoo seit ${minutes} min nicht erreichbar, ${label} wartet weiter`
+            })
+        }
+    }
+}
+
 /**
  * Sends one request and waits out an Odoo outage: on a not-delivered failure (or an unclear one for retryable
  * methods) it polls /web/health until it reports pass and then resends.
@@ -169,25 +280,10 @@ export async function sendWithWaiting(
     outages: OutageRegistry
 ): Promise<RequestOutcome> {
     const label = `${target.model}/${target.method}`
+    const remembered = await checkRememberedOutage(deps, target, settings, outages, label)
+    if (remembered) return remembered
 
-    const gaveUpAt = outages.get(target.odooUrl)
-    if (gaveUpAt !== undefined) {
-        if (await deps.isHealthy()) {
-            outages.delete(target.odooUrl)
-        } else if (deps.now() - gaveUpAt < settings.maxWaitMs) {
-            return {
-                ok: false,
-                odooUnavailable: true,
-                message: `Odoo weiterhin nicht erreichbar (aufgegeben vor ${minutesBetween(gaveUpAt, deps.now())} min), ${label} nicht ausgefuehrt`
-            }
-        } else {
-            outages.delete(target.odooUrl)
-        }
-    }
-
-    let attempt = 0
-    for (;;) {
-        attempt++
+    for (let attempt = 1; ; attempt++) {
         const result = await deps.send()
         const classification = classify(result)
         const httpStatus = statusOf(result)
@@ -205,76 +301,19 @@ export async function sendWithWaiting(
             }
         }
 
-        const reason = classification.reason
-        if (!classification.notDelivered && !target.retryable) {
-            const message = `Odoo nicht erreichbar (${reason}) bei ${label}. Nicht wiederholt, weil die Anfrage schon ausgefuehrt sein kann: in Odoo pruefen`
-            await deps.log({ level: 'error', event: 'odoo_nicht_wiederholt', message, attempt, httpStatus })
-            return { ok: false, odooUnavailable: true, message, httpStatus }
-        }
-        if (attempt >= settings.maxAttempts) {
-            const message = `Odoo nicht erreichbar (${reason}) bei ${label}, nach ${attempt} Versuchen aufgegeben`
-            await deps.log({ level: 'error', event: 'odoo_aufgegeben', message, attempt, httpStatus })
-            return { ok: false, odooUnavailable: true, message, httpStatus }
+        const giveUp = giveUpReason(classification, target, attempt, settings, label)
+        if (giveUp) {
+            await deps.log({ level: 'error', event: giveUp.event, message: giveUp.message, attempt, httpStatus })
+            return { ok: false, odooUnavailable: true, message: giveUp.message, httpStatus }
         }
 
-        const waitingSince = deps.now()
-        const since = new Date(waitingSince).toISOString()
-        await deps.log({
-            level: 'warn',
-            event: 'odoo_nicht_erreichbar',
-            message: `Odoo nicht erreichbar (${reason}) bei ${label}, Versuch ${attempt}, warte auf /web/health`,
+        const stopped = await waitForRecovery(deps, target, settings, outages, {
+            label,
+            reason: classification.reason,
             attempt,
-            httpStatus,
-            waitingSince: since
+            httpStatus
         })
-
-        let lastLog = waitingSince
-        for (;;) {
-            if (deps.isCancelled()) {
-                return {
-                    ok: false,
-                    odooUnavailable: true,
-                    message: `Lauf abgebrochen, waehrend ${label} auf Odoo wartete`,
-                    httpStatus
-                }
-            }
-            await deps.sleep(settings.checkIntervalMs)
-            if (await deps.isHealthy()) {
-                await deps.log({
-                    level: 'info',
-                    event: 'odoo_wieder_erreichbar',
-                    message: `Odoo wieder erreichbar nach ${minutesBetween(waitingSince, deps.now())} min, ${label} wird erneut geschickt`,
-                    attempt,
-                    httpStatus,
-                    waitingSince: since
-                })
-                break
-            }
-            if (deps.now() - waitingSince >= settings.maxWaitMs) {
-                outages.set(target.odooUrl, deps.now())
-                const message = `Odoo seit ${minutesBetween(waitingSince, deps.now())} min nicht erreichbar (/web/health meldet kein pass), ${label} nicht ausgefuehrt`
-                await deps.log({
-                    level: 'error',
-                    event: 'odoo_wartezeit_ueberschritten',
-                    message,
-                    attempt,
-                    httpStatus,
-                    waitingSince: since
-                })
-                return { ok: false, odooUnavailable: true, message, httpStatus }
-            }
-            if (deps.now() - lastLog >= settings.waitingLogIntervalMs) {
-                lastLog = deps.now()
-                await deps.log({
-                    level: 'warn',
-                    event: 'odoo_wartet',
-                    message: `Odoo seit ${minutesBetween(waitingSince, deps.now())} min nicht erreichbar, ${label} wartet weiter`,
-                    attempt,
-                    httpStatus,
-                    waitingSince: since
-                })
-            }
-        }
+        if (stopped) return stopped
     }
 }
 
@@ -288,12 +327,24 @@ export function toRecords(body: unknown): IDataObject[] {
     )
 }
 
+/** Trimmed http(s) URL without trailing slashes, or undefined. A loop instead of /\/+$/ avoids regex backtracking. */
+function toHttpUrl(raw: string): string | undefined {
+    let value = (raw ?? '').trim()
+    while (value.endsWith('/')) value = value.slice(0, -1)
+    try {
+        const url = new URL(value)
+        return url.protocol === 'http:' || url.protocol === 'https:' ? value : undefined
+    } catch {
+        return undefined
+    }
+}
+
 export function normalizeOdooUrl(raw: string, node: INode, itemIndex: number): string {
-    const trimmed = (raw ?? '').trim().replace(/\/+$/, '')
-    if (!/^https?:\/\/\S+$/.test(trimmed)) {
+    const url = toHttpUrl(raw)
+    if (!url) {
         throw new NodeOperationError(node, `Odoo URL "${raw}" is not a valid http(s) URL`, { itemIndex })
     }
-    return trimmed
+    return url
 }
 
 export function validateTarget(model: string, method: string, node: INode, itemIndex: number): void {
@@ -324,13 +375,13 @@ export function parseBody(raw: unknown, node: INode, itemIndex: number): IDataOb
 }
 
 export function resolveLokiPushUrl(raw: string, node: INode): string {
-    const trimmed = (raw ?? '').trim().replace(/\/+$/, '')
-    if (!/^https?:\/\/\S+$/.test(trimmed)) {
+    const url = toHttpUrl(raw)
+    if (!url) {
         throw new NodeOperationError(node, `Loki URL "${raw}" is not a valid http(s) URL`)
     }
-    return trimmed.endsWith('/loki/api/v1/push')
-        ? trimmed
-        : `${trimmed.replace(/\/loki\/api\/v1$/, '')}/loki/api/v1/push`
+    if (url.endsWith('/loki/api/v1/push')) return url
+    const base = url.endsWith('/loki/api/v1') ? url.slice(0, -'/loki/api/v1'.length) : url
+    return `${base}/loki/api/v1/push`
 }
 
 export interface LokiContext {
