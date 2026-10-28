@@ -39,12 +39,12 @@
         "n8n-workflow": "*"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.5.15",
-        "@n8n/node-cli": "0.53.2",
+        "@biomejs/biome": "2.6.3",
+        "@n8n/node-cli": "0.54.2",
         "@vitest/coverage-v8": "5.0.5",
         "eslint": "9.39.5",
         "lefthook": "2.2.2",
-        "n8n-workflow": "2.44.1",
+        "n8n-workflow": "2.45.1",
         "typescript": "6.0.3",
         "vitest": "5.0.5"
     }
