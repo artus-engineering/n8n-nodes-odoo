@@ -1,4 +1,4 @@
-name: Publish NPM Package
+name: Publish Package (npm + GitHub Packages)
 
 # n8n requires community nodes submitted for verification to be published via
 # GitHub Actions with an npm provenance statement (mandatory from 1 May 2026).
@@ -8,14 +8,23 @@ on:
   release:
     types:
       - published
+  # Manual run: publishes only to GitHub Packages (e.g. to backfill a version
+  # that already exists on npmjs). Builds the current default-branch checkout.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish to GitHub Packages only (e.g. 0.1.0)"
+        required: true
+        type: string
 
 jobs:
   publish:
-    name: Publish to npm
+    name: Publish
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token for npm provenance / Trusted Publishing
       contents: read
+      packages: write # publish to npm.pkg.github.com with GITHUB_TOKEN
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -43,7 +52,7 @@ jobs:
 
       - name: Update package.json version
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
           VERSION="${VERSION#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
@@ -54,4 +63,26 @@ jobs:
         run: pnpm run test
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        if: github.event_name == 'release'
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already on npmjs, skipping"
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          GH=https://npm.pkg.github.com
+          printf "@artus-engineering:registry=%s\n//npm.pkg.github.com/:_authToken=%s\n" "$GH" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/gh.npmrc"
+          if npm view "$NAME@$VERSION" version --registry="$GH" --userconfig "$RUNNER_TEMP/gh.npmrc" >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already on GitHub Packages, skipping"
+          else
+            npm publish --registry="$GH" --userconfig "$RUNNER_TEMP/gh.npmrc" --access public
+          fi
