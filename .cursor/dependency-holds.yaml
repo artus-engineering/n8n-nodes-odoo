@@ -1,0 +1,21 @@
+holds:
+    - package: eslint
+      root: .
+      current: 9.39.x
+      blocked: ">=10.0.0"
+      reason: >-
+          ESLint 10 crashes n8n-node lint on 2026-11-16 (Cannot find module errors in
+          @typescript-eslint/typescript-estree with TypeScript 7 peer resolution).
+      source: automation
+      since: 2026-11-16
+      last_checked: 2026-11-16
+      migration_pr: null
+    - package: n8n-workflow
+      root: .
+      current: 2.48.x
+      blocked: ">=3.0.0"
+      reason: deferred by the weekly cap, not attempted yet
+      source: automation
+      since: 2026-11-16
+      last_checked: 2026-11-16
+      migration_pr: null
