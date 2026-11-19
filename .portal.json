@@ -1,0 +1,10 @@
+{
+  "$schema": "https://portal.artus.engineering/schemas/portal.json",
+  "projectId": "cmw5oltb1002h01eftx40ukcp",
+  "components": {
+    "n8n-nodes-odoo": {
+      "name": "n8n Odoo Node",
+      "kind": "SERVICE"
+    }
+  }
+}
