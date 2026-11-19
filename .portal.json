@@ -4,10 +4,7 @@
   "components": {
     "n8n-nodes-odoo": {
       "name": "n8n Odoo Node",
-      "kind": "SERVICE",
-      "integrations": {
-        "sonarqube": "artus-engineering_n8n-nodes-odoo_a0891ee7-354c-4ff3-97f2-e52cc08b6c53"
-      }
+      "kind": "SERVICE"
     }
   }
 }
