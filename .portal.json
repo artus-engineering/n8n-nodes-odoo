@@ -4,7 +4,10 @@
     "components": {
         "n8n-nodes-odoo": {
             "name": "n8n Odoo Node",
-            "kind": "SERVICE"
+            "kind": "SERVICE",
+            "environments": {
+                "local": {}
+            }
         }
     }
 }
