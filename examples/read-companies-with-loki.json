@@ -1,0 +1,193 @@
+{
+    "name": "Odoo - Read companies with Loki logging",
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "manual-trigger",
+            "name": "Manual Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [0, 0]
+        },
+        {
+            "parameters": {
+                "operation": "setWorkflowLogging",
+                "loggingEnabled": true,
+                "labels": {
+                    "assignments": [
+                        {
+                            "name": "env",
+                            "value": "demo",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "options": {
+                    "propagateToSubWorkflows": true
+                }
+            },
+            "id": "workflow-logging",
+            "name": "Set Workflow Logging",
+            "type": "@artus-engineering/n8n-nodes-loki.loki",
+            "typeVersion": 1,
+            "position": [240, 0]
+        },
+        {
+            "parameters": {
+                "model": "res.partner",
+                "method": "search_read",
+                "body": "{\"domain\": [[\"is_company\", \"=\", true]], \"fields\": [\"name\"], \"limit\": 10}",
+                "options": {}
+            },
+            "id": "read-companies",
+            "name": "Read Companies",
+            "type": "@artus-engineering/n8n-nodes-odoo.odooJson2",
+            "typeVersion": 1,
+            "position": [460, 0],
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 2
+                    },
+                    "conditions": [
+                        {
+                            "id": "has-error",
+                            "leftValue": "={{ $json.error !== undefined }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "true",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "check-result",
+            "name": "Request Failed?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.2,
+            "position": [740, -80]
+        },
+        {
+            "parameters": {},
+            "id": "handle-failure",
+            "name": "Handle Failed Request",
+            "type": "n8n-nodes-base.noOp",
+            "typeVersion": 1,
+            "position": [980, -180]
+        },
+        {
+            "parameters": {},
+            "id": "handle-success",
+            "name": "Process Companies",
+            "type": "n8n-nodes-base.noOp",
+            "typeVersion": 1,
+            "position": [980, 0]
+        },
+        {
+            "parameters": {
+                "operation": "push",
+                "logFormat": "json",
+                "jsonInputMode": "raw",
+                "jsonBody": "={{ $json.log }}",
+                "labels": {
+                    "assignments": [
+                        {
+                            "name": "level",
+                            "value": "={{ $json.log.level }}",
+                            "type": "string"
+                        },
+                        {
+                            "name": "component",
+                            "value": "odoo",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "options": {
+                    "timestamp": "={{ $json.log.timestamp }}"
+                }
+            },
+            "id": "send-outage-log",
+            "name": "Send Outage Log",
+            "type": "@artus-engineering/n8n-nodes-loki.loki",
+            "typeVersion": 1,
+            "position": [740, 180],
+            "onError": "continueRegularOutput"
+        }
+    ],
+    "connections": {
+        "Manual Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Set Workflow Logging",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Set Workflow Logging": {
+            "main": [
+                [
+                    {
+                        "node": "Read Companies",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Read Companies": {
+            "main": [
+                [
+                    {
+                        "node": "Request Failed?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Send Outage Log",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Request Failed?": {
+            "main": [
+                [
+                    {
+                        "node": "Handle Failed Request",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Process Companies",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "pinData": {}
+}

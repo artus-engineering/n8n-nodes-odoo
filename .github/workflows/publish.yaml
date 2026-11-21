@@ -21,6 +21,7 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       id-token: write # mint the OIDC token for npm provenance / Trusted Publishing
       contents: read
@@ -51,8 +52,10 @@ jobs:
         run: pnpm run typecheck
 
       - name: Update package.json version
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
         run: |
-          VERSION="${{ github.event.release.tag_name || inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           VERSION="${VERSION#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
@@ -61,6 +64,9 @@ jobs:
 
       - name: Unit tests
         run: pnpm run test
+
+      - name: Verify npm contents and n8n community package
+        run: pnpm run check:package
 
       - name: Publish to npm
         if: github.event_name == 'release'

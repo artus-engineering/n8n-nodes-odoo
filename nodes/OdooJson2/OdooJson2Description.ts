@@ -86,13 +86,6 @@ export const odooJson2Properties: INodeProperties[] = [
         ]
     },
     {
-        displayName: 'Log Outages to Loki',
-        name: 'lokiLogging',
-        type: 'boolean',
-        default: false,
-        description: 'Whether to write outage, waiting and recovery events to Loki'
-    },
-    {
         displayName: 'Options',
         name: 'options',
         type: 'collection',
@@ -138,7 +131,7 @@ export const odooJson2Properties: INodeProperties[] = [
                 type: 'number',
                 typeOptions: { minValue: 1 },
                 default: 5,
-                description: 'How often a "still waiting" event is written to Loki'
+                description: 'How often a still-waiting event is recorded on the Outage Logs output'
             }
         ]
     }

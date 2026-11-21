@@ -44,7 +44,13 @@ export default defineConfig({
             reporter: ['text', 'lcovonly'],
             reportsDirectory: 'coverage',
             include: ['nodes/**/*.ts', 'credentials/**/*.ts'],
-            exclude: ['nodes/**/*Description.ts']
+            exclude: ['nodes/**/*Description.ts'],
+            thresholds: {
+                statements: 100,
+                lines: 100,
+                functions: 100,
+                branches: 90
+            }
         }
     }
 })

@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest an improvement to this node
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and what is missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed behaviour
+      description: Describe the desired outcome and any alternatives you considered.
+    validations:
+      required: true

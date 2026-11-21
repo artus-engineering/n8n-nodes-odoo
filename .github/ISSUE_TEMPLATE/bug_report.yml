@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem with the Odoo JSON-2 node
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check existing issues first. Remove API keys, credentials, customer data and private URLs from examples.
+        Report security vulnerabilities privately through SECURITY.md.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Package version, n8n version, Odoo version and deployment type
+      placeholder: "Package 0.1.0; n8n 2.x; Odoo 19; Docker"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the model, method, relevant options and a minimal sanitized example.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the error message or HTTP status and sanitized logs, if available.
+    validations:
+      required: true
