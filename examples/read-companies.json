@@ -1,0 +1,44 @@
+{
+    "name": "Odoo - Read companies",
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "manual-trigger",
+            "name": "Manual Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [0, 0]
+        },
+        {
+            "parameters": {
+                "model": "res.partner",
+                "method": "search_read",
+                "body": "{\"domain\": [[\"is_company\", \"=\", true]], \"fields\": [\"name\"], \"limit\": 10}",
+                "options": {}
+            },
+            "id": "read-companies",
+            "name": "Read Companies",
+            "type": "@artus-engineering/n8n-nodes-odoo.odooJson2",
+            "typeVersion": 1,
+            "position": [460, 0]
+        }
+    ],
+    "connections": {
+        "Manual Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Read Companies",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "pinData": {}
+}

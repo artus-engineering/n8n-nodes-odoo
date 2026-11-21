@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/artus-engineering/n8n-nodes-odoo/blob/main/SECURITY.md
+    about: Please report security issues privately.
+  - name: n8n community support
+    url: https://community.n8n.io/
+    about: Ask general questions about n8n workflows and installation.

@@ -2,9 +2,9 @@
     "name": "@artus-engineering/n8n-nodes-odoo",
     "version": "0.1.0",
     "packageManager": "pnpm@12.21.0",
-    "description": "n8n community node for the Odoo JSON-2 API that waits out Odoo outages and logs them to Grafana Loki.",
+    "description": "n8n community node for the Odoo JSON-2 API with outage recovery, controlled retries and a separate log output.",
     "license": "MIT",
-    "homepage": "https://artus-engineering.de",
+    "homepage": "https://github.com/artus-engineering/n8n-nodes-odoo#readme",
     "keywords": ["n8n-community-node-package", "n8n", "odoo", "json-2", "retry", "loki"],
     "author": {
         "name": "Artus Engineering",
@@ -21,7 +21,7 @@
     "n8n": {
         "n8nNodesApiVersion": 1,
         "strict": true,
-        "credentials": ["dist/credentials/OdooJson2Api.credentials.js", "dist/credentials/OdooLokiApi.credentials.js"],
+        "credentials": ["dist/credentials/OdooJson2Api.credentials.js"],
         "nodes": ["dist/nodes/OdooJson2/OdooJson2.node.js"]
     },
     "scripts": {
@@ -33,7 +33,9 @@
         "lint:n8n": "n8n-node lint",
         "typecheck": "tsc -p tsconfig.test.json --noEmit",
         "test": "vitest run --coverage",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "check:package": "node scripts/check-package.mjs && scan-community-package .",
+        "check": "pnpm run lint && pnpm run lint:n8n && pnpm run typecheck && pnpm run build && pnpm run test && pnpm run check:package"
     },
     "peerDependencies": {
         "n8n-workflow": "*"
@@ -41,6 +43,7 @@
     "devDependencies": {
         "@biomejs/biome": "2.6.8",
         "@n8n/node-cli": "0.57.3",
+        "@n8n/scan-community-package": "0.44.0",
         "@vitest/coverage-v8": "5.1.0",
         "eslint": "9.39.5",
         "lefthook": "2.2.2",

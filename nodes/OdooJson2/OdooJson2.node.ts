@@ -13,7 +13,6 @@ import {
     sleep
 } from 'n8n-workflow'
 import {
-    buildLokiPayload,
     isRetryable,
     type LogEvent,
     normalizeOdooUrl,
@@ -22,7 +21,6 @@ import {
     parseBody,
     type RequestOutcome,
     type RetryMode,
-    resolveLokiPushUrl,
     type SendResult,
     sendWithWaiting,
     toRecords,
@@ -35,11 +33,11 @@ import { odooJson2Properties } from './OdooJson2Description'
 const outages: OutageRegistry = new Map()
 
 const HEALTH_TIMEOUT_MS = 10000
-const LOKI_TIMEOUT_MS = 10000
 
 function readSettings(this: IExecuteFunctions, itemIndex: number): WaitSettings & { timeoutMs: number } {
     const options = this.getNodeParameter('options', itemIndex, {}) as IDataObject
-    const positive = (value: unknown, fallback: number) => (Number(value) > 0 ? Number(value) : fallback)
+    const positive = (value: unknown, fallback: number) =>
+        Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback
     return {
         maxWaitMs: positive(options.maxWaitMinutes, 60) * 60000,
         checkIntervalMs: positive(options.checkIntervalSeconds, 30) * 1000,
@@ -58,26 +56,12 @@ async function isHealthy(this: IExecuteFunctions, odooUrl: string): Promise<bool
             timeout: HEALTH_TIMEOUT_MS,
             returnFullResponse: true,
             ignoreHttpStatusErrors: true
-        })) as { body?: { status?: unknown } }
-        return response.body?.status === 'pass'
+        })) as OdooResponse
+        const body = response.body as { status?: unknown } | undefined
+        return Number(response.statusCode) >= 200 && Number(response.statusCode) < 300 && body?.status === 'pass'
     } catch (error) {
         this.logger.debug(`Odoo health check ${odooUrl}/web/health failed: ${(error as Error).message}`)
         return false
-    }
-}
-
-async function pushToLoki(this: IExecuteFunctions, pushUrl: string, payload: IDataObject): Promise<void> {
-    try {
-        await this.helpers.httpRequestWithAuthentication.call(this, 'odooLokiApi', {
-            method: 'POST',
-            url: pushUrl,
-            body: payload,
-            json: true,
-            timeout: LOKI_TIMEOUT_MS
-        })
-    } catch (error) {
-        // An unreachable Loki must not break the Odoo call; n8n's own log keeps the trace.
-        this.logger.warn(`Odoo JSON-2: Loki push failed: ${(error as Error).message}`)
     }
 }
 
@@ -134,7 +118,12 @@ function readItemRequest(
     }
 }
 
-function createDependencies(this: IExecuteFunctions, request: ItemRequest, lokiPushUrl?: string): WaitDependencies {
+function createDependencies(
+    this: IExecuteFunctions,
+    request: ItemRequest,
+    logData: INodeExecutionData[],
+    itemIndex: number
+): WaitDependencies {
     const node = this.getNode()
     const workflow = this.getWorkflow()
     const httpRequest: IHttpRequestOptions = {
@@ -146,15 +135,6 @@ function createDependencies(this: IExecuteFunctions, request: ItemRequest, lokiP
         timeout: request.settings.timeoutMs,
         returnFullResponse: true,
         ignoreHttpStatusErrors: true
-    }
-    const lokiContext = {
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-        executionId: this.getExecutionId(),
-        nodeName: node.name,
-        model: request.model,
-        method: request.method,
-        odooUrl: request.odooUrl
     }
     return {
         send: async (): Promise<SendResult> => {
@@ -170,14 +150,30 @@ function createDependencies(this: IExecuteFunctions, request: ItemRequest, lokiP
             }
         },
         isHealthy: () => isHealthy.call(this, request.odooUrl),
-        sleep: ms => sleep(ms),
+        // n8n's sleep rejects only when the signal aborts; the waiting loop then returns its cancellation outcome.
+        sleep: ms => sleep(ms, this.getExecutionCancelSignal?.()).catch(() => undefined),
         now: () => Date.now(),
         isCancelled: () => this.getExecutionCancelSignal?.()?.aborted === true,
         log: async (event: LogEvent) => {
-            this.logger.warn(`Odoo JSON-2 ${node.name}: ${event.event}: ${event.message}`)
-            if (lokiPushUrl) {
-                await pushToLoki.call(this, lokiPushUrl, buildLokiPayload(event, lokiContext, Date.now()))
-            }
+            this.logger[event.level](`Odoo JSON-2 ${node.name}: ${event.event}: ${event.message}`)
+            const inherited = this.getInputData()[itemIndex]?.json._lokiLogging
+            logData.push({
+                json: {
+                    log: {
+                        ...event,
+                        timestamp: new Date().toISOString(),
+                        workflow: workflow.name ?? '',
+                        workflow_id: workflow.id ?? '',
+                        execution_id: this.getExecutionId(),
+                        node: node.name,
+                        model: request.model,
+                        method: request.method,
+                        odoo_url: request.odooUrl
+                    },
+                    ...(inherited === undefined ? {} : { _lokiLogging: inherited })
+                },
+                pairedItem: { item: itemIndex }
+            })
         }
     }
 }
@@ -204,11 +200,11 @@ async function processItem(
     credentials: ICredentialDataDecryptedObject,
     model: string,
     method: string,
-    lokiPushUrl?: string
+    logData: INodeExecutionData[]
 ): Promise<INodeExecutionData[]> {
     const request = readItemRequest.call(this, itemIndex, credentials, model, method)
     const outcome = await sendWithWaiting(
-        createDependencies.call(this, request, lokiPushUrl),
+        createDependencies.call(this, request, logData, itemIndex),
         { odooUrl: request.odooUrl, model, method, retryable: isRetryable(method, request.retryMode) },
         request.settings,
         outages
@@ -244,31 +240,24 @@ export class OdooJson2 implements INodeType {
         },
         usableAsTool: true,
         inputs: [NodeConnectionTypes.Main],
-        outputs: [NodeConnectionTypes.Main],
-        credentials: [
-            { name: 'odooJson2Api', required: true },
-            { name: 'odooLokiApi', required: true, displayOptions: { show: { lokiLogging: [true] } } }
-        ],
+        outputs: [NodeConnectionTypes.Main, NodeConnectionTypes.Main],
+        outputNames: ['Results', 'Outage Logs'],
+        credentials: [{ name: 'odooJson2Api', required: true }],
         properties: odooJson2Properties
     }
 
     async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
         const items = this.getInputData()
         const returnData: INodeExecutionData[] = []
+        const logData: INodeExecutionData[] = []
         const credentials = await this.getCredentials('odooJson2Api')
         const node = this.getNode()
-
-        let lokiPushUrl: string | undefined
-        if (this.getNodeParameter('lokiLogging', 0, false) === true) {
-            const lokiCredentials = await this.getCredentials('odooLokiApi')
-            lokiPushUrl = resolveLokiPushUrl(lokiCredentials.url as string, node)
-        }
 
         for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
             const model = String(this.getNodeParameter('model', itemIndex, '')).trim()
             const method = String(this.getNodeParameter('method', itemIndex, '')).trim()
             try {
-                returnData.push(...(await processItem.call(this, itemIndex, credentials, model, method, lokiPushUrl)))
+                returnData.push(...(await processItem.call(this, itemIndex, credentials, model, method, logData)))
             } catch (error) {
                 if (this.continueOnFail() && !(error instanceof NodeApiError)) {
                     returnData.push({
@@ -283,6 +272,6 @@ export class OdooJson2 implements INodeType {
             }
         }
 
-        return [returnData]
+        return [returnData, logData]
     }
 }

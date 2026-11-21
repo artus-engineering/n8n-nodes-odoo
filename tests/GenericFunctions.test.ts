@@ -1,15 +1,13 @@
 import type { INode } from 'n8n-workflow'
 import { NodeOperationError } from 'n8n-workflow'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
-    buildLokiPayload,
     classify,
     isRetryable,
     type LogEvent,
     normalizeOdooUrl,
     type OutageRegistry,
     parseBody,
-    resolveLokiPushUrl,
     type SendResult,
     sendWithWaiting,
     toRecords,
@@ -132,7 +130,12 @@ describe('classify', () => {
             message: 'certificate has expired'
         })
         expect(classify({ error: 'boom' })).toEqual({ kind: 'failed', message: 'boom' })
-        expect(classify({ error: 42 })).toEqual({ kind: 'failed', message: 'unbekannter Fehler' })
+        expect(classify({ error: 42 })).toEqual({ kind: 'failed', message: 'Unknown error' })
+    })
+
+    it('falls back to the HTTP status when an error body has no usable message', () => {
+        expect(classify(status(400, { unexpected: true }))).toEqual({ kind: 'failed', message: 'HTTP 400' })
+        expect(classify(status(400, '   '))).toEqual({ kind: 'failed', message: 'HTTP 400' })
     })
 })
 
@@ -169,9 +172,9 @@ describe('sendWithWaiting', () => {
         expect(outcome.ok).toBe(true)
         expect(h.sends()).toBe(2)
         expect(h.healthChecks()).toBe(3)
-        expect(h.logs.map(l => l.event)).toEqual(['odoo_nicht_erreichbar', 'odoo_wieder_erreichbar'])
+        expect(h.logs.map(l => l.event)).toEqual(['unavailable', 'recovered'])
         expect(h.logs[0]).toMatchObject({ level: 'warn', httpStatus: 405, attempt: 1 })
-        expect(h.logs[1].message).toContain('nach 2 min')
+        expect(h.logs[1].message).toContain('after 2 min')
     })
 
     it('does not resend a non-retryable request after 502', async () => {
@@ -183,8 +186,8 @@ describe('sendWithWaiting', () => {
             new Map()
         )
         expect(outcome).toMatchObject({ ok: false, odooUnavailable: true, httpStatus: 502 })
-        expect(outcome.ok === false && outcome.message).toContain('in Odoo pruefen')
-        expect(h.logs.map(l => l.event)).toEqual(['odoo_nicht_wiederholt'])
+        expect(outcome.ok === false && outcome.message).toContain('check the result in Odoo')
+        expect(h.logs.map(l => l.event)).toEqual(['not_retried'])
         expect(h.sends()).toBe(1)
     })
 
@@ -201,9 +204,9 @@ describe('sendWithWaiting', () => {
         const h = harness({ responses: [networkError('ECONNREFUSED'), ok()], health })
         await sendWithWaiting(h.deps, target, settings, new Map())
         const events = h.logs.map(l => l.event)
-        expect(events.filter(e => e === 'odoo_wartet')).toHaveLength(2)
-        expect(events[0]).toBe('odoo_nicht_erreichbar')
-        expect(events.at(-1)).toBe('odoo_wieder_erreichbar')
+        expect(events.filter(e => e === 'waiting')).toHaveLength(2)
+        expect(events[0]).toBe('unavailable')
+        expect(events.at(-1)).toBe('recovered')
     })
 
     it('gives up after max wait and fails following requests at once while Odoo stays down', async () => {
@@ -211,24 +214,25 @@ describe('sendWithWaiting', () => {
         const h = harness({ responses: [status(503)], health: [false] })
         const first = await sendWithWaiting(h.deps, target, settings, outages)
         expect(first).toMatchObject({ ok: false, odooUnavailable: true })
-        expect(h.logs.at(-1)?.event).toBe('odoo_wartezeit_ueberschritten')
+        expect(h.logs.at(-1)?.event).toBe('wait_timeout')
         expect(outages.has(target.odooUrl)).toBe(true)
 
         const sendsBefore = h.sends()
         const second = await sendWithWaiting(h.deps, target, settings, outages)
         expect(second).toMatchObject({ ok: false, odooUnavailable: true })
-        expect(second.ok === false && second.message).toContain('weiterhin nicht erreichbar')
+        expect(second.ok === false && second.message).toContain('still unavailable')
         expect(h.sends()).toBe(sendsBefore)
     })
 
-    it('waits again once the remembered outage is older than max wait', async () => {
+    it('keeps failing fast even when the remembered outage is older than max wait', async () => {
         const outages: OutageRegistry = new Map()
         const h = harness({ responses: [ok()], health: [false] })
         outages.set(target.odooUrl, h.deps.now())
         h.advance(settings.maxWaitMs)
         const outcome = await sendWithWaiting(h.deps, target, settings, outages)
-        expect(outcome.ok).toBe(true)
-        expect(outages.has(target.odooUrl)).toBe(false)
+        expect(outcome.ok).toBe(false)
+        expect(h.sends()).toBe(0)
+        expect(outages.has(target.odooUrl)).toBe(true)
     })
 
     it('forgets the outage when Odoo is healthy again', async () => {
@@ -242,16 +246,109 @@ describe('sendWithWaiting', () => {
     it('gives up after max attempts', async () => {
         const h = harness({ responses: [status(405)], health: [true] })
         const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxAttempts: 3 }, new Map())
-        expect(outcome.ok === false && outcome.message).toContain('nach 3 Versuchen aufgegeben')
+        expect(outcome.ok === false && outcome.message).toContain('gave up after 3 attempts')
         expect(h.sends()).toBe(3)
-        expect(h.logs.at(-1)?.event).toBe('odoo_aufgegeben')
+        expect(h.logs.at(-1)?.event).toBe('attempts_exhausted')
     })
 
-    it('stops waiting when the execution is cancelled', async () => {
+    it('does not send any request when the execution is already cancelled', async () => {
         const h = harness({ responses: [status(503)], cancelled: true })
         const outcome = await sendWithWaiting(h.deps, target, settings, new Map())
-        expect(outcome.ok === false && outcome.message).toContain('abgebrochen')
+        expect(outcome.ok === false && outcome.message).toContain('cancelled')
+        expect(h.sends()).toBe(0)
         expect(h.healthChecks()).toBe(0)
+    })
+
+    it('stops after cancellation during sleep without checking health or retrying', async () => {
+        const scenario = { responses: [status(503), ok()], health: [true], cancelled: false }
+        const h = harness(scenario)
+        h.deps.sleep = async () => {
+            scenario.cancelled = true
+        }
+        const outcome = await sendWithWaiting(h.deps, target, settings, new Map())
+        expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining('cancelled') })
+        expect(h.sends()).toBe(1)
+        expect(h.healthChecks()).toBe(0)
+    })
+
+    it.each([false, true])('stops if cancellation arrives during a health check (cached: %s)', async cached => {
+        const scenario = { responses: [status(503), ok()], cancelled: false }
+        const h = harness(scenario)
+        const outages: OutageRegistry = new Map()
+        if (cached) outages.set(target.odooUrl, h.deps.now())
+        h.deps.isHealthy = async () => {
+            scenario.cancelled = true
+            return true
+        }
+        const outcome = await sendWithWaiting(h.deps, target, settings, outages)
+        expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining('cancelled') })
+        expect(h.sends()).toBe(cached ? 0 : 1)
+    })
+
+    it('checks cancellation again after logging recovery', async () => {
+        const scenario = { responses: [status(503), ok()], health: [true], cancelled: false }
+        const h = harness(scenario)
+        h.deps.log = async event => {
+            if (event.level === 'info') scenario.cancelled = true
+        }
+        const outcome = await sendWithWaiting(h.deps, target, settings, new Map())
+        expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining('cancelled') })
+        expect(h.sends()).toBe(1)
+    })
+
+    it('caps the sleep interval at the remaining wait budget', async () => {
+        const h = harness({ responses: [status(503)], health: [true] })
+        const sleep = vi.spyOn(h.deps, 'sleep')
+        const started = h.deps.now()
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 1000 }, new Map())
+        expect(outcome.ok).toBe(false)
+        expect(sleep).toHaveBeenCalledExactlyOnceWith(1000)
+        expect(h.deps.now() - started).toBe(1000)
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(2)
+        expect(h.logs.at(-1)?.event).toBe('wait_timeout')
+    })
+
+    it('checks health at the deadline when the wait budget is shorter than the check interval', async () => {
+        const h = harness({ responses: [status(503), ok()], health: [true] })
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 1000 }, new Map())
+        expect(outcome.ok).toBe(true)
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(2)
+    })
+
+    it('gives up after a failed health check at the deadline', async () => {
+        const outages: OutageRegistry = new Map()
+        const h = harness({ responses: [status(503)], health: [false] })
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 1000 }, outages)
+        expect(outcome).toMatchObject({ ok: false, odooUnavailable: true })
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(1)
+        expect(outages.has(target.odooUrl)).toBe(true)
+    })
+
+    it('does not restart the wait budget when Odoo repeatedly becomes unavailable', async () => {
+        const h = harness({ responses: [status(503)], health: [true] })
+        const started = h.deps.now()
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 75000 }, new Map())
+        expect(outcome.ok).toBe(false)
+        expect(h.deps.now() - started).toBe(75000)
+        expect(h.sends()).toBe(4)
+        expect(h.logs.at(-1)?.event).toBe('wait_timeout')
+    })
+
+    it('resends without recording an outage when a health check passes after the deadline', async () => {
+        const outages: OutageRegistry = new Map()
+        const h = harness({ responses: [status(503), ok()] })
+        h.deps.isHealthy = async () => {
+            h.advance(settings.maxWaitMs)
+            return true
+        }
+        const outcome = await sendWithWaiting(h.deps, target, settings, outages)
+        expect(outcome.ok).toBe(true)
+        expect(h.sends()).toBe(2)
+        expect(outages.has(target.odooUrl)).toBe(false)
+        expect(h.logs.map(l => l.event)).toEqual(['unavailable', 'recovered'])
     })
 })
 
@@ -270,6 +367,20 @@ describe('input helpers', () => {
     it('normalizes the Odoo URL', () => {
         expect(normalizeOdooUrl(' https://odoo.test/ ', node, 0)).toBe('https://odoo.test')
         expect(() => normalizeOdooUrl('odoo.test', node, 0)).toThrow(NodeOperationError)
+        expect(() => normalizeOdooUrl('ftp://odoo.test', node, 0)).toThrow(NodeOperationError)
+        expect(() => normalizeOdooUrl(undefined as unknown as string, node, 0)).toThrow(NodeOperationError)
+    })
+
+    it.each([
+        'https://user@odoo.test',
+        'https://:private-value@odoo.test',
+        'https://odoo.test?token=private-value',
+        'https://odoo.test#private-value',
+        'https://odoo.test?',
+        'https://odoo.test/#'
+    ])('rejects unsafe base URLs without echoing their contents: %s', raw => {
+        expect(() => normalizeOdooUrl(raw, node, 0)).toThrow(NodeOperationError)
+        expect(() => normalizeOdooUrl(raw, node, 0)).not.toThrow(/private-value/)
     })
 
     it('validates model and method', () => {
@@ -285,64 +396,5 @@ describe('input helpers', () => {
         expect(parseBody({ ids: [1] }, node, 0)).toEqual({ ids: [1] })
         expect(() => parseBody('{', node, 0)).toThrow(/valid JSON/)
         expect(() => parseBody('[1]', node, 0)).toThrow(/JSON object/)
-    })
-
-    it('resolves the Loki push URL', () => {
-        expect(resolveLokiPushUrl('https://loki.test/', node)).toBe('https://loki.test/loki/api/v1/push')
-        expect(resolveLokiPushUrl('https://loki.test/loki/api/v1', node)).toBe('https://loki.test/loki/api/v1/push')
-        expect(resolveLokiPushUrl('https://loki.test/loki/api/v1/push', node)).toBe(
-            'https://loki.test/loki/api/v1/push'
-        )
-        expect(() => resolveLokiPushUrl('', node)).toThrow(NodeOperationError)
-    })
-})
-
-describe('buildLokiPayload', () => {
-    it('writes labels like the Loki node and the event as JSON line', () => {
-        const payload = buildLokiPayload(
-            { level: 'warn', event: 'odoo_nicht_erreichbar', message: 'weg', attempt: 1, httpStatus: 502 },
-            {
-                workflowId: 'wf1',
-                workflowName: 'Odoo Kontakte',
-                executionId: '123',
-                nodeName: 'Partner suchen',
-                model: 'res.partner',
-                method: 'search_read',
-                odooUrl: 'https://odoo.test'
-            },
-            1_700_000_000_000
-        ) as { streams: Array<{ stream: Record<string, string>; values: [string, string, Record<string, string>][] }> }
-        const [stream] = payload.streams
-        expect(stream.stream).toEqual({
-            job: 'n8n',
-            workflow: 'Odoo Kontakte',
-            workflow_id: 'wf1',
-            stufe: 'odoo_verfuegbarkeit',
-            level: 'warn'
-        })
-        const [timestamp, line, metadata] = stream.values[0]
-        expect(timestamp).toBe('1700000000000000000')
-        expect(metadata).toEqual({ execution_id: '123' })
-        expect(JSON.parse(line)).toEqual({
-            message: 'Odoo Kontakte / Partner suchen: weg',
-            ereignis: 'odoo_nicht_erreichbar',
-            node: 'Partner suchen',
-            model: 'res.partner',
-            methode: 'search_read',
-            http_status: 502,
-            versuch: 1,
-            wartet_seit: null,
-            odoo_url: 'https://odoo.test'
-        })
-    })
-
-    it('omits the execution id when there is none', () => {
-        const payload = buildLokiPayload(
-            { level: 'info', event: 'odoo_wieder_erreichbar', message: 'da', attempt: 2 },
-            { nodeName: 'X', model: 'm', method: 'read', odooUrl: 'https://o' },
-            0
-        ) as { streams: Array<{ stream: Record<string, string>; values: unknown[][] }> }
-        expect(payload.streams[0].values[0][2]).toEqual({})
-        expect(payload.streams[0].stream.workflow).toBe('')
     })
 })
