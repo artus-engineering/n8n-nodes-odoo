@@ -9,7 +9,8 @@ on:
     types:
       - published
   # Manual run: publishes only to GitHub Packages (e.g. to backfill a version
-  # that already exists on npmjs). Builds the current default-branch checkout.
+  # that already exists on npmjs). Builds the ref selected for the run; select the
+  # release tag when backfilling a released version.
   workflow_dispatch:
     inputs:
       version:

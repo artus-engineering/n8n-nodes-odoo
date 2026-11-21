@@ -304,7 +304,27 @@ describe('sendWithWaiting', () => {
         expect(outcome.ok).toBe(false)
         expect(sleep).toHaveBeenCalledExactlyOnceWith(1000)
         expect(h.deps.now() - started).toBe(1000)
-        expect(h.healthChecks()).toBe(0)
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(2)
+        expect(h.logs.at(-1)?.event).toBe('wait_timeout')
+    })
+
+    it('checks health at the deadline when the wait budget is shorter than the check interval', async () => {
+        const h = harness({ responses: [status(503), ok()], health: [true] })
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 1000 }, new Map())
+        expect(outcome.ok).toBe(true)
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(2)
+    })
+
+    it('gives up after a failed health check at the deadline', async () => {
+        const outages: OutageRegistry = new Map()
+        const h = harness({ responses: [status(503)], health: [false] })
+        const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 1000 }, outages)
+        expect(outcome).toMatchObject({ ok: false, odooUnavailable: true })
+        expect(h.healthChecks()).toBe(1)
+        expect(h.sends()).toBe(1)
+        expect(outages.has(target.odooUrl)).toBe(true)
     })
 
     it('does not restart the wait budget when Odoo repeatedly becomes unavailable', async () => {
@@ -313,19 +333,22 @@ describe('sendWithWaiting', () => {
         const outcome = await sendWithWaiting(h.deps, target, { ...settings, maxWaitMs: 75000 }, new Map())
         expect(outcome.ok).toBe(false)
         expect(h.deps.now() - started).toBe(75000)
-        expect(h.sends()).toBe(3)
+        expect(h.sends()).toBe(4)
         expect(h.logs.at(-1)?.event).toBe('wait_timeout')
     })
 
-    it('does not resend when the health request finishes after the deadline', async () => {
+    it('resends without recording an outage when a health check passes after the deadline', async () => {
+        const outages: OutageRegistry = new Map()
         const h = harness({ responses: [status(503), ok()] })
         h.deps.isHealthy = async () => {
             h.advance(settings.maxWaitMs)
             return true
         }
-        const outcome = await sendWithWaiting(h.deps, target, settings, new Map())
-        expect(outcome.ok).toBe(false)
-        expect(h.sends()).toBe(1)
+        const outcome = await sendWithWaiting(h.deps, target, settings, outages)
+        expect(outcome.ok).toBe(true)
+        expect(h.sends()).toBe(2)
+        expect(outages.has(target.odooUrl)).toBe(false)
+        expect(h.logs.map(l => l.event)).toEqual(['unavailable', 'recovered'])
     })
 })
 
@@ -352,7 +375,9 @@ describe('input helpers', () => {
         'https://user@odoo.test',
         'https://:private-value@odoo.test',
         'https://odoo.test?token=private-value',
-        'https://odoo.test#private-value'
+        'https://odoo.test#private-value',
+        'https://odoo.test?',
+        'https://odoo.test/#'
     ])('rejects unsafe base URLs without echoing their contents: %s', raw => {
         expect(() => normalizeOdooUrl(raw, node, 0)).toThrow(NodeOperationError)
         expect(() => normalizeOdooUrl(raw, node, 0)).not.toThrow(/private-value/)

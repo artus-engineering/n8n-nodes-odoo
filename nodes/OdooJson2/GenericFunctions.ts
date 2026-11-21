@@ -249,18 +249,19 @@ async function waitForRecovery(
     for (;;) {
         const cancelled = cancellationOutcome(deps, label, httpStatus)
         if (cancelled) return cancelled
-        const minutes = minutesBetween(waitingSince, deps.now())
         const remaining = deadline - deps.now()
         if (remaining <= 0) {
             outages.set(target.odooUrl, deps.now())
+            const minutes = minutesBetween(waitingSince, deps.now())
             const message = `Odoo did not recover within ${minutes} min; stopped retrying ${label}. Check Odoo before repeating requests that may have been executed`
             await deps.log({ ...base, level: 'error', event: 'wait_timeout', message })
             return { ok: false, odooUnavailable: true, message, httpStatus }
         }
         await deps.sleep(Math.min(settings.checkIntervalMs, remaining))
-        if (deps.isCancelled() || deps.now() >= deadline) continue
+        if (deps.isCancelled()) continue
+        // The last sleep ends at the deadline; its health check still counts, even if the request returns late.
         const healthy = await deps.isHealthy()
-        if (deps.isCancelled() || deps.now() >= deadline) continue
+        if (deps.isCancelled()) continue
         if (healthy) {
             outages.delete(target.odooUrl)
             await deps.log({
@@ -354,7 +355,8 @@ function toHttpUrl(raw: string): string | undefined {
     while (value.endsWith('/')) value = value.slice(0, -1)
     try {
         const url = new URL(value)
-        if (url.username || url.password || url.search || url.hash) return undefined
+        // The parser reports an empty query or fragment ("https://odoo.test?") as '', so check the raw value too.
+        if (url.username || url.password || /[?#]/.test(value)) return undefined
         return url.protocol === 'http:' || url.protocol === 'https:' ? value : undefined
     } catch {
         return undefined

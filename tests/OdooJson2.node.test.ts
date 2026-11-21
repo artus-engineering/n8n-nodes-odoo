@@ -302,14 +302,45 @@ describe('OdooJson2 node', () => {
         const health = vi.fn()
         const odoo = vi.fn(async () => ({ statusCode: 503 }))
         const { context } = stub({ odoo, health, cancelSignal: controller.signal })
-        const execution = new OdooJson2().execute.call(context)
-        const rejected = expect(execution).rejects.toBeInstanceOf(NodeOperationError)
+        const failure = new OdooJson2().execute.call(context).then(
+            () => undefined,
+            (error: unknown) => error
+        )
         await vi.advanceTimersByTimeAsync(0)
         controller.abort(new Error('Execution cancelled'))
-        await rejected
+        const error = await failure
+        expect(error).toBeInstanceOf(NodeApiError)
+        expect((error as NodeApiError).message).toContain('cancelled')
         expect(health).not.toHaveBeenCalled()
         expect(odoo).toHaveBeenCalledTimes(1)
         expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('wraps unexpected runtime errors in a NodeOperationError', async () => {
+        const { context, logger } = stub({ odoo: async () => ({ statusCode: 503 }) })
+        logger.warn.mockImplementation(() => {
+            throw new Error('logger unavailable')
+        })
+        const failure = await new OdooJson2().execute.call(context).catch((error: unknown) => error)
+        expect(failure).toBeInstanceOf(NodeOperationError)
+        expect((failure as NodeOperationError).message).toBe('logger unavailable')
+    })
+
+    it('returns a regular error item when a cancelled wait runs with Continue', async () => {
+        vi.useFakeTimers()
+        const controller = new AbortController()
+        const odoo = vi.fn(async () => ({ statusCode: 503 }))
+        const { context } = stub({ odoo, continueOnFail: true, cancelSignal: controller.signal })
+        const execution = new OdooJson2().execute.call(context)
+        await vi.advanceTimersByTimeAsync(0)
+        controller.abort(new Error('Execution cancelled'))
+        const [out] = await execution
+        expect(out[0].json.error).toMatchObject({
+            message: expect.stringContaining('cancelled'),
+            status: 503,
+            odoo_nicht_erreichbar: false,
+            methode: 'search_read'
+        })
     })
 
     it('uses finite default timeouts for invalid expression values', async () => {

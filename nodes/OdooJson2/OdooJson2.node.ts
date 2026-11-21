@@ -150,7 +150,8 @@ function createDependencies(
             }
         },
         isHealthy: () => isHealthy.call(this, request.odooUrl),
-        sleep: ms => sleep(ms, this.getExecutionCancelSignal?.()),
+        // n8n's sleep rejects only when the signal aborts; the waiting loop then returns its cancellation outcome.
+        sleep: ms => sleep(ms, this.getExecutionCancelSignal?.()).catch(() => undefined),
         now: () => Date.now(),
         isCancelled: () => this.getExecutionCancelSignal?.()?.aborted === true,
         log: async (event: LogEvent) => {

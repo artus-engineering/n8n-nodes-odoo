@@ -22,7 +22,7 @@ Canonical contributor and AI-agent guide for `@artus-engineering/n8n-nodes-odoo`
 - Any other status is an Odoo error and goes straight to the caller.
 - After `maxWaitMinutes` the request fails and the Odoo URL is remembered in a process-wide registry, so following requests fail at once instead of each waiting again; the registry is cleared as soon as `/web/health` passes.
 - Waiting uses `sleep` from `n8n-workflow` with the execution cancellation signal (no `setTimeout`, see `no-restricted-globals`). Check cancellation before sending and after asynchronous health checks.
-- A request shares one wait deadline across outage/recovery cycles. Polling sleeps are capped at the remaining budget; in-flight HTTP calls still have their own timeouts.
+- A request shares one wait deadline across outage/recovery cycles. Polling sleeps are capped at the remaining budget, and the health check after the final sleep still runs; a pass is honoured even if that check returns after the deadline. In-flight HTTP calls still have their own timeouts.
 - The outage registry expires only when health passes or the process restarts, not after another wait interval.
 
 ## Logging contract

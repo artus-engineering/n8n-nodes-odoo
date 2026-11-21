@@ -16,6 +16,7 @@
                 "labels": {
                     "assignments": [
                         {
+                            "id": "label-env",
                             "name": "env",
                             "value": "demo",
                             "type": "string"
@@ -102,11 +103,13 @@
                 "labels": {
                     "assignments": [
                         {
+                            "id": "label-level",
                             "name": "level",
                             "value": "={{ $json.log.level }}",
                             "type": "string"
                         },
                         {
+                            "id": "label-component",
                             "name": "component",
                             "value": "odoo",
                             "type": "string"
