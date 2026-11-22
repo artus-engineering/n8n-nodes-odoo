@@ -257,7 +257,8 @@ export class OdooJson2 implements INodeType {
             const model = String(this.getNodeParameter('model', itemIndex, '')).trim()
             const method = String(this.getNodeParameter('method', itemIndex, '')).trim()
             try {
-                returnData.push(...(await processItem.call(this, itemIndex, credentials, model, method, logData)))
+                const results = await processItem.call(this, itemIndex, credentials, model, method, logData)
+                for (const result of results) returnData.push(result)
             } catch (error) {
                 if (this.continueOnFail() && !(error instanceof NodeApiError)) {
                     returnData.push({

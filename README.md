@@ -284,7 +284,7 @@ This runs Biome, strict n8n lint, TypeScript, the build, Vitest with coverage, n
 
 ## Releases
 
-A [GitHub Release](https://github.com/artus-engineering/n8n-nodes-odoo/releases) with a semver tag triggers the publishing workflow. The tag without `v` becomes the package version. The workflow checks the package and publishes to npm through [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with provenance, then mirrors it to GitHub Packages.
+A [GitHub Release](https://github.com/artus-engineering/n8n-nodes-odoo/releases) with a semver tag, such as `v1.0.0`, triggers the publishing workflow. The tag without `v` becomes the package version. The workflow checks the package and publishes directly to the public npm registry through [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with provenance. npm is the only publishing target. Stable releases use the `latest` dist-tag; GitHub prereleases and prerelease versions use `next`.
 
 Maintainers should release a tested commit from `main`. Local npm publishing is not part of this project's release process. See [docs/ci.md](docs/ci.md) for publishing, fork PR checks and verification after release.
 

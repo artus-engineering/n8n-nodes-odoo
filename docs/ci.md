@@ -7,20 +7,23 @@ Runner: `ubuntu-latest` (public repo). Cross-project tooling: [Repository Toolin
 | File | Purpose |
 | --- | --- |
 | `.github/workflows/branch.yaml` | Biome lint, n8n node/credential lint, type check, build, unit tests, package-content check, official n8n scan → SonarQube scan → quality gate |
-| `.github/workflows/publish.yaml` | On a published GitHub Release: lint, type check, build, test, package checks, `npm publish --provenance`, GitHub Packages mirror |
+| `.github/workflows/publish.yaml` | On a published GitHub Release: lint, type check, build, test, package checks, direct npm publication with provenance |
 
-## Required checks
+## Checks to require before release
 
 On `main`:
 
+- **Lint and format**
+- **Typecheck**
+- **Build** (including package checks)
 - **Tests**
 - **SonarQube Scan**
 
-The quality gate runs inside the **SonarQube Scan** job — a failed gate fails that check.
+The quality gate runs inside the **SonarQube Scan** job — a failed gate fails that check. Verify all five jobs on the exact release commit; running these jobs in CI does not by itself make them required by GitHub branch rules.
 
 Secrets: `SONAR_TOKEN`, `SONAR_HOST_URL`.
 
-Fork PRs run the Tests job, including both linters, type checking, build, coverage, package-content validation and the official community scanner. The SonarQube job is skipped because GitHub does not expose repository secrets to forks. A maintainer must bring a reviewed contribution onto a trusted repository branch and obtain a passing SonarQube gate before merging. Never switch to `pull_request_target` to expose secrets to contributor code.
+Fork PRs run the lint, typecheck, build and tests jobs, including coverage, package-content validation and the official community scanner. The SonarQube job is skipped because GitHub does not expose repository secrets to forks. A maintainer must bring a reviewed contribution onto a trusted repository branch and obtain a passing SonarQube gate before merging. Never switch to `pull_request_target` to expose secrets to contributor code.
 
 All jobs have bounded timeouts and read-only repository access unless publishing or PR decoration requires more. The npm scanner is pinned as a development dependency and scans both source and the files npm would publish. `pnpm run check` runs the complete local suite.
 
@@ -28,7 +31,9 @@ PRs use the `pull_request` event so tests and Sonar analyze the PR head. `pull_r
 
 ## Publishing and npm provenance
 
-`publish.yaml` publishes with `npm publish --provenance --access public` using npm [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (GitHub OIDC) — no `NPM_TOKEN` secret, and `NODE_AUTH_TOKEN` must never be set in that step (it overrides OIDC authentication).
+`publish.yaml` publishes directly to `https://registry.npmjs.org` with `npm publish --provenance --access public` using npm [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (GitHub OIDC). npm is the only publishing target; there is no GitHub Packages mirror or manual backfill workflow. `package.json#publishConfig` also selects the public npm registry. No `NPM_TOKEN` secret is required, and the publish step must not set `NODE_AUTH_TOKEN`.
+
+The npm Trusted Publisher must name `artus-engineering/n8n-nodes-odoo` and `publish.yaml`, and must allow **npm publish**. Permission for **npm stage publish** alone does not authorize this workflow. A new trusted-publisher configuration must complete its first successful publish within two days; if it expires, recreate it before releasing. The restrictive 2FA/token setting remains compatible with OIDC.
 
 This is not just an org convention here: from **1 May 2026**, n8n requires community nodes submitted for verification to be published via a GitHub Actions workflow with a provenance statement, and will not accept nodes published from a local machine. Publishing only ever happens through this workflow, triggered by a GitHub Release — never via a local `npm publish`.
 
@@ -45,14 +50,14 @@ This is not just an org convention here: from **1 May 2026**, n8n requires commu
 A local scan cannot verify npm provenance or the attested release source. After publishing, run the same scanner against the exact released version:
 
 ```bash
-pnpm exec scan-community-package @artus-engineering/n8n-nodes-odoo@0.2.0
+pnpm exec scan-community-package @artus-engineering/n8n-nodes-odoo@1.0.0
 ```
 
-Replace `0.2.0` with the actual release version. This checks the published provenance and source as well. Passing these checks does not constitute approval in the n8n Creator Portal.
+Replace `1.0.0` with the actual release version. This checks the published provenance and source as well. Passing these checks does not constitute approval in the n8n Creator Portal.
 
-The release workflow receives its version through an environment variable before passing it to `npm version`, rather than interpolating event text into shell code. It publishes npm packages only on the release event. Manual dispatch is reserved for the existing GitHub Packages backfill flow and builds the selected workflow ref; select the release tag when backfilling a released version.
+The release workflow validates the tag as a version and passes it through an environment variable to `npm version`, rather than interpolating event text into shell code. A tag such as `v1.0.0` publishes version `1.0.0`; the repository's development version does not need a separate bump. Stable releases use npm's default `latest` tag, retaining npm's check against publishing an older version as latest; GitHub prereleases and versions with a semver prerelease suffix use `next`. Jobs for the same release tag are serialized, and reruns skip a version already present on npm.
 
-Keep the npm Trusted Publisher configured for this repository and `publish.yaml`. Use the workflow's Node.js 24 runtime with an npm version that supports Trusted Publishing. The npm step must not set `NODE_AUTH_TOKEN`; GitHub Packages authentication is scoped to its own step.
+Before releasing v1, merge the release-readiness changes, verify all five CI jobs on the resulting `main` commit, and create a GitHub Release tagged `v1.0.0` at that commit. Use the workflow's Node.js 24 runtime with an npm version that supports Trusted Publishing. After the publish job succeeds, run the version-specific scan above.
 
 ## Dependency audit
 

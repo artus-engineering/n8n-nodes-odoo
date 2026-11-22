@@ -1,4 +1,4 @@
-name: Publish Package (npm + GitHub Packages)
+name: Publish Package (npm)
 
 # n8n requires community nodes submitted for verification to be published via
 # GitHub Actions with an npm provenance statement (mandatory from 1 May 2026).
@@ -8,15 +8,10 @@ on:
   release:
     types:
       - published
-  # Manual run: publishes only to GitHub Packages (e.g. to backfill a version
-  # that already exists on npmjs). Builds the ref selected for the run; select the
-  # release tag when backfilling a released version.
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to publish to GitHub Packages only (e.g. 0.1.0)"
-        required: true
-        type: string
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -26,7 +21,6 @@ jobs:
     permissions:
       id-token: write # mint the OIDC token for npm provenance / Trusted Publishing
       contents: read
-      packages: write # publish to npm.pkg.github.com with GITHUB_TOKEN
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -54,10 +48,17 @@ jobs:
 
       - name: Update package.json version
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name }}
         run: |
           VERSION="$RELEASE_VERSION"
           VERSION="${VERSION#v}"
+          NUMBER='(0|[1-9][0-9]*)'
+          IDENTIFIER="($NUMBER|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+          SEMVER="$NUMBER\.$NUMBER\.$NUMBER(-$IDENTIFIER(\.$IDENTIFIER)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?"
+          if [[ ! "$VERSION" =~ ^$SEMVER$ ]]; then
+            echo "::error::Release tag must be a semantic version, for example v1.0.0"
+            exit 1
+          fi
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Build
@@ -70,26 +71,17 @@ jobs:
         run: pnpm run check:package
 
       - name: Publish to npm
-        if: github.event_name == 'release'
+        env:
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
+          TAG_ARGS=()
+          if [[ "$RELEASE_PRERELEASE" == "true" || "${VERSION%%+*}" == *-* ]]; then
+            TAG_ARGS=(--tag=next)
+          fi
           if npm view "$NAME@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             echo "$NAME@$VERSION already on npmjs, skipping"
           else
-            npm publish --provenance --access public
-          fi
-
-      - name: Publish to GitHub Packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          NAME=$(node -p "require('./package.json').name")
-          VERSION=$(node -p "require('./package.json').version")
-          GH=https://npm.pkg.github.com
-          printf "@artus-engineering:registry=%s\n//npm.pkg.github.com/:_authToken=%s\n" "$GH" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/gh.npmrc"
-          if npm view "$NAME@$VERSION" version --registry="$GH" --userconfig "$RUNNER_TEMP/gh.npmrc" >/dev/null 2>&1; then
-            echo "$NAME@$VERSION already on GitHub Packages, skipping"
-          else
-            npm publish --registry="$GH" --userconfig "$RUNNER_TEMP/gh.npmrc" --access public
+            npm publish --provenance --access public --registry=https://registry.npmjs.org "${TAG_ARGS[@]}"
           fi
