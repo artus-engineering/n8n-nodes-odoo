@@ -18,6 +18,10 @@
         "url": "https://github.com/artus-engineering/n8n-nodes-odoo/issues"
     },
     "files": ["dist"],
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org"
+    },
     "n8n": {
         "n8nNodesApiVersion": 1,
         "strict": true,

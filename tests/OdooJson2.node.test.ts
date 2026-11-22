@@ -130,6 +130,16 @@ describe('OdooJson2 node', () => {
         ])
     })
 
+    it('returns large record sets without exceeding the JavaScript argument limit', async () => {
+        const records = Array.from({ length: 150000 }, (_, id) => ({ id }))
+        const { context } = stub({ odoo: async () => ({ statusCode: 200, body: records }) })
+        const [out] = await new OdooJson2().execute.call(context)
+
+        expect(out).toHaveLength(records.length)
+        expect(out[0]).toEqual({ json: { id: 0 }, pairedItem: { item: 0 } })
+        expect(out.at(-1)).toEqual({ json: { id: records.length - 1 }, pairedItem: { item: 0 } })
+    })
+
     it('returns the full response when asked to', async () => {
         const odoo = vi.fn(async () => ({ statusCode: 200, headers: { a: '1' }, body: [] }))
         const { context } = stub({ odoo, params: [{ output: 'fullResponse' }] })

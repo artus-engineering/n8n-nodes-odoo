@@ -101,10 +101,10 @@ Releases are driven by GitHub Releases, not local npm scripts. See `.github/work
 To cut a release:
 
 1. Ensure `main` is green.
-2. Create a GitHub Release with a semver tag, e.g. `v0.2.0` (leading `v` is stripped automatically).
-3. The workflow sets `package.json` version from the release tag, runs `lint` → `lint:n8n` → `typecheck` → `build` → `test` → `check:package`, and publishes `@artus-engineering/n8n-nodes-odoo` to the public npm registry with `npm publish --provenance`.
+2. Create a GitHub Release with a semver tag, e.g. `v1.0.0` (leading `v` is stripped automatically).
+3. The workflow sets `package.json` version from the release tag, runs `lint` → `lint:n8n` → `typecheck` → `build` → `test` → `check:package`, and publishes `@artus-engineering/n8n-nodes-odoo` directly to the public npm registry with `npm publish --provenance`. npm is the only publishing target; do not reintroduce a GitHub Packages mirror or backfill flow. Stable releases use `latest`; GitHub prereleases and semver prerelease versions use `next`.
 
-Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC) via the GitHub connection configured on npmjs.com for `publish.yaml`. No `NPM_TOKEN` secret is required. Do not set `NODE_AUTH_TOKEN` in the publish step — it overrides OIDC authentication. This also satisfies n8n's requirement (mandatory from 1 May 2026) that verified community nodes be published via GitHub Actions with an npm provenance statement.
+Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC) via the GitHub connection configured on npmjs.com for `publish.yaml`. The publisher must allow `npm publish`; `npm stage publish` alone is insufficient. No `NPM_TOKEN` secret is required, and the publish step must not set `NODE_AUTH_TOKEN`. This also satisfies n8n's requirement (mandatory from 1 May 2026) that verified community nodes be published via GitHub Actions with an npm provenance statement.
 
 ### n8n community node verification
 
