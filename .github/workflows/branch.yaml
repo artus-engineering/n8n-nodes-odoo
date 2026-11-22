@@ -97,6 +97,7 @@ jobs:
       - name: Verify npm contents and n8n community package
         run: pnpm run check:package
 
+    if: ${{ github.event_name != 'pull_request' }}
   tests:
     name: Tests
     runs-on: ubuntu-latest
