@@ -21,11 +21,11 @@ minimumReleaseAgeExclude:
     - "@biomejs/cli-win32-arm64@2.6.8"
     - "@biomejs/cli-win32-x64@2.6.8"
 overrides:
-    handlebars@>=3.0.0 <=4.7.9: ^4.7.10
-    qs@>=2.2.5 <6.16.1: ^6.16.1
-    stream-json@<3.6.0: ^3.6.0
-    uuid@<11.1.1: ^11.1.1
-    minimatch@>=7.0.0 <11.0.1: ^11.0.9
-    glob@>=9.0.0 <=14.0.1: ^14.0.2
-    follow-redirects@>=1.16.0 <=1.16.1: ^1.16.2
-    tmp@<0.2.6: ^0.2.7
+    handlebars@>=3.0.0 <=4.7.9: ^4.7.10 # transitive via n8n toolchain; floor for prototype pollution advisories
+    qs@>=2.2.5 <6.16.1: ^6.16.1 # CVE-2025-15284; remove when parent packages depend on >=6.16.1
+    stream-json@<3.6.0: ^3.6.0 # floor outdated transitive copies from n8n tooling
+    uuid@<11.1.1: ^11.1.1 # security floor for older uuid copies in n8n deps
+    minimatch@>=7.0.0 <11.0.1: ^11.0.9 # ReDoS advisories on minimatch <11.0.9
+    glob@>=9.0.0 <=14.0.1: ^14.0.2 # glob CLI injection / CVE floors on older majors
+    follow-redirects@>=1.16.0 <=1.16.1: ^1.16.2 # GHSA-5gf5-8258-pgqv
+    tmp@<0.2.6: ^0.2.7 # GHSA-ph9p-34f9-6g65 via @n8n/scan-community-package>tmp; verified needed 2026-11-23
