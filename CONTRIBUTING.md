@@ -10,7 +10,7 @@ Report security vulnerabilities privately as described in [SECURITY.md](SECURITY
 
 ## Set up the project
 
-Use Node.js 24 and the exact pnpm version in `package.json#packageManager` (currently `12.21.0`). Install that pnpm version using your preferred package-manager setup, then:
+Use Node.js 24 and the exact pnpm version in `package.json#packageManager` (currently `12.23.0`). Install that pnpm version using your preferred package-manager setup, then:
 
 ```bash
 git clone https://github.com/artus-engineering/n8n-nodes-odoo.git

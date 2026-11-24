@@ -1,7 +1,7 @@
 {
     "name": "@artus-engineering/n8n-nodes-odoo",
-    "version": "0.1.1",
-    "packageManager": "pnpm@12.21.0",
+    "version": "0.1.2",
+    "packageManager": "pnpm@12.23.0",
     "description": "n8n community node for the Odoo JSON-2 API with outage recovery, controlled retries and a separate log output.",
     "license": "MIT",
     "homepage": "https://github.com/artus-engineering/n8n-nodes-odoo#readme",
@@ -46,7 +46,7 @@
     },
     "devDependencies": {
         "@biomejs/biome": "2.6.8",
-        "@n8n/node-cli": "0.57.4",
+        "@n8n/node-cli": "0.57.5",
         "@n8n/scan-community-package": "0.44.0",
         "@vitest/coverage-v8": "5.1.1",
         "eslint": "10.15.0",

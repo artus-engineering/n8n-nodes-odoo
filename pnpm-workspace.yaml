@@ -20,6 +20,19 @@ minimumReleaseAgeExclude:
     - "@biomejs/cli-linux-x64@2.6.8"
     - "@biomejs/cli-win32-arm64@2.6.8"
     - "@biomejs/cli-win32-x64@2.6.8"
+    - "@n8n/ai-node-sdk@0.38.5"
+    - "@n8n/ai-utilities@0.41.5"
+    - "@n8n/api-types@1.48.5"
+    - "@n8n/backend-common@1.48.5"
+    - "@n8n/backend-network@1.22.5"
+    - "@n8n/decorators@1.48.5"
+    - "@n8n/eslint-plugin-community-nodes@0.40.1"
+    - "@n8n/expression-runtime@0.39.4"
+    - "@n8n/inbound-auth@0.7.4"
+    - "@n8n/node-cli@0.57.5"
+    - "@n8n/permissions@0.84.1"
+    - "@n8n/utils@1.55.1"
+    - n8n-workflow@2.48.4
 overrides:
     handlebars@>=3.0.0 <=4.7.9: ^4.7.10 # transitive via n8n toolchain; floor for prototype pollution advisories
     qs@>=2.2.5 <6.16.1: ^6.16.1 # CVE-2025-15284; remove when parent packages depend on >=6.16.1
